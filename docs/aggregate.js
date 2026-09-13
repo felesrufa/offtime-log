@@ -5,7 +5,7 @@
  * ブラウザ（PWA）と node の両方で動く。仕様の正本は aggregate.py で、
  * 両者の一致は tests/parity.py で確認する。
  *
- *   const report = OfftimeLog.buildReport(text, { today: "2026-09-13" });
+ *   const report = OfftimeLog.buildReport(text, { today: "2026-03-08" });
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {
@@ -22,7 +22,7 @@
   const DATE_RE = /^(\d{4})\/(\d{1,2})\/(\d{1,2})（(.)）\s*$/;
   const SECTION_RE = /^【(朝|昼|夜)】(.*)$/;
   const TIME_RE = /^(\d{1,2}):(\d{2})$/;
-  const TAP_RE = /^(\d{4})\/(\d{1,2})\/(\d{1,2})[ 　]+(\d{1,2}):(\d{2})[ 　]*(外|着)[ 　]*$/;
+  const TAP_RE = /^(\d{4})\/(\d{1,2})\/(\d{1,2})[ 　]+(\d{1,2}):(\d{2})[ 　]*(START|STOP)[ 　]*$/i;
 
   const DAILY_LIMIT_MIN = 240;   // 1日の目標上限(4時間)
   const NOON_START_MIN = 11 * 60;    // これより前に外した → 【朝】
@@ -181,7 +181,7 @@
           addWarning(warnings, null, `[日付不正] ${line} (行${lineno}): 存在しない日時です`);
           continue;
         }
-        taps.push({ day: day, min: hour * 60 + minute, kind: m[6], raw: line, lineno: lineno });
+        taps.push({ day: day, min: hour * 60 + minute, kind: m[6].toUpperCase(), raw: line, lineno: lineno });
         continue;
       }
 
@@ -235,16 +235,16 @@
     let pending = null;
     let ongoing = null;
     for (const ev of events) {
-      if (ev.kind === "外") {
+      if (ev.kind === "START") {
         if (pending !== null) {
           addWarning(warnings, pending.day,
-            `[打刻不整合] ${pending.raw}: 「着」の打刻がないまま次の「外」があります（この「外」は無視）`);
+            `[打刻不整合] ${pending.raw}: STOP の打刻がないまま次の START があります（この START は無視）`);
         }
         pending = ev;
         continue;
       }
       if (pending === null) {
-        addWarning(warnings, ev.day, `[打刻不整合] ${ev.raw}: 直前に「外」の打刻がありません（無視）`);
+        addWarning(warnings, ev.day, `[打刻不整合] ${ev.raw}: 直前に START の打刻がありません（無視）`);
         continue;
       }
       if (ev.day === pending.day) {
@@ -265,7 +265,7 @@
       if (pending.day === today) {
         ongoing = pending;
       } else {
-        addWarning(warnings, pending.day, `[打刻不整合] ${pending.raw}: 「着」の打刻がありません`);
+        addWarning(warnings, pending.day, `[打刻不整合] ${pending.raw}: STOP の打刻がありません`);
       }
     }
     return { byDate, ongoing };

@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TODAY = "2026-09-13"
+TODAY = "2026-03-08"
 
 
 def run_py(file, month=None):

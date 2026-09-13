@@ -15,12 +15,12 @@ log.txt は対象を外していた時刻の記録。
         【夜】18:00-18:20、20:30-21:00
 
 (B) 打刻形式（iOSショートカットが背面タップで追記する行）
-    1行 = 1打刻。「外」= 外した、「着」= つけた。
+    1行 = 1打刻。START = 計測開始（外した）、STOP = 計測終了（つけた）。
 
-        2026/09/13 08:24 外
-        2026/09/13 09:22 着
+        2026/03/10 07:05 START
+        2026/03/10 07:40 STOP
 
-    「外」→「着」の順に組にして、外した時刻で区分を決める
+    START→STOP の順に組にして、外した時刻で区分を決める
     （11:00 より前=【朝】、16:00 より前=【昼】、それ以降=【夜】）。
 
 使い方:
@@ -29,7 +29,7 @@ log.txt は対象を外していた時刻の記録。
     python aggregate.py --month 2026-02    2026年2月だけ集計
     python aggregate.py other.txt -m 2026-02
     python aggregate.py --json             画面表示の代わりに JSON を出力（PWA との突き合わせ用）
-    python aggregate.py --today 2026-09-13 「今日」を固定する（テスト用。省略時は実日付）
+    python aggregate.py --today 2026-03-08 「今日」を固定する（テスト用。省略時は実日付）
 """
 
 import sys
@@ -52,7 +52,7 @@ LABELS = ["朝", "昼", "夜"]
 DATE_RE = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})（(.)）\s*$")
 SECTION_RE = re.compile(r"^【(朝|昼|夜)】(.*)$")
 TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
-TAP_RE = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})[ 　]+(\d{1,2}):(\d{2})[ 　]*(外|着)[ 　]*$")
+TAP_RE = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})[ 　]+(\d{1,2}):(\d{2})[ 　]*(START|STOP)[ 　]*$", re.IGNORECASE)
 MONTH_ARG_RE = re.compile(r"^(\d{4})-(\d{1,2})$")
 DAY_ARG_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
 
@@ -78,7 +78,7 @@ def format_time(minutes):
 
 
 def day_label(d):
-    """date -> "2026/9/13（日）"（手書き形式の日付行と同じ見た目）。"""
+    """date -> "2026/3/8（日）"（手書き形式の日付行と同じ見た目）。"""
     return f"{d.year}/{d.month}/{d.day}（{WEEKDAY_CHARS[d.weekday()]}）"
 
 
@@ -111,7 +111,7 @@ def section_of(start_min):
 
 def parse_time(token):
     """
-    "8:24" のような文字列を分(0-1439)に変換する。
+    "7:05" のような文字列を分(0-1439)に変換する。
     戻り値: (分, エラーメッセージ or None)
     """
     token = token.strip()
@@ -126,7 +126,7 @@ def parse_time(token):
 
 def parse_pair(chunk, label, day_str, when, warnings):
     """
-    "8:24-9:22" のようなペア文字列を (start_min, end_min) に変換する。
+    "7:05-7:40" のようなペア文字列を (start_min, end_min) に変換する。
     不正な場合は None を返し、warnings に追記する。
     """
     chunk = chunk.strip()
@@ -170,7 +170,7 @@ def parse_log_text(text):
             "sections": {"朝": [(start,end),...], "昼": [...], "夜": [...]},
             "present_labels": {"朝","夜"} のような、行として存在した区分の集合,
         }
-    打刻イベント: {"dt": datetime, "kind": "外"|"着", "raw": 元の行, "lineno": 行番号}
+    打刻イベント: {"dt": datetime, "kind": "START"|"STOP", "raw": 元の行, "lineno": 行番号}
     warnings: {"date": date または None, "text": str} のリスト
     """
     days = []
@@ -186,6 +186,7 @@ def parse_log_text(text):
         m = TAP_RE.match(line)
         if m:
             year, month, day, hour, minute, kind = m.groups()
+            kind = kind.upper()
             try:
                 dt = datetime(int(year), int(month), int(day), int(hour), int(minute))
             except ValueError:
@@ -228,9 +229,9 @@ def parse_log_text(text):
 
 def build_tap_days(taps, warnings, today):
     """
-    打刻イベントを時刻順に並べ、「外」→「着」を組にして日次レコードにする。
+    打刻イベントを時刻順に並べ、START→STOP を組にして日次レコードにする。
     戻り値: ({date: record}, ongoing)
-    ongoing: 今日の「外」で「着」がまだ無いもの（外し中）。無ければ None。
+    ongoing: 今日の START で STOP がまだ無いもの（外し中）。無ければ None。
     """
     events = sorted(taps, key=lambda t: (t["dt"], t["lineno"]))
     by_date = {}
@@ -249,18 +250,18 @@ def build_tap_days(taps, warnings, today):
     pending = None
     ongoing = None
     for ev in events:
-        if ev["kind"] == "外":
+        if ev["kind"] == "START":
             if pending is not None:
                 add_warning(
                     warnings, pending["dt"].date(),
-                    f"[打刻不整合] {pending['raw']}: 「着」の打刻がないまま次の「外」があります（この「外」は無視）",
+                    f"[打刻不整合] {pending['raw']}: STOP の打刻がないまま次の START があります（この START は無視）",
                 )
             pending = ev
             continue
 
-        # kind == "着"
+        # kind == "STOP"
         if pending is None:
-            add_warning(warnings, ev["dt"].date(), f"[打刻不整合] {ev['raw']}: 直前に「外」の打刻がありません（無視）")
+            add_warning(warnings, ev["dt"].date(), f"[打刻不整合] {ev['raw']}: 直前に START の打刻がありません（無視）")
             continue
         s, e = pending["dt"], ev["dt"]
         sd, ed = s.date(), e.date()
@@ -286,7 +287,7 @@ def build_tap_days(taps, warnings, today):
         if pending["dt"].date() == today:
             ongoing = pending
         else:
-            add_warning(warnings, pending["dt"].date(), f"[打刻不整合] {pending['raw']}: 「着」の打刻がありません")
+            add_warning(warnings, pending["dt"].date(), f"[打刻不整合] {pending['raw']}: STOP の打刻がありません")
 
     return by_date, ongoing
 
@@ -640,7 +641,7 @@ def main():
     if args.today:
         m = DAY_ARG_RE.match(args.today)
         if not m:
-            print(f"--today の形式が不正です: '{args.today}' (例: 2026-09-13)")
+            print(f"--today の形式が不正です: '{args.today}' (例: 2026-03-08)")
             sys.exit(1)
         today = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
