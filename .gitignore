@@ -9,3 +9,10 @@
 !aggregate.py
 !README.md
 !.gitignore
+!SHORTCUTS.md
+!DESIGN.md
+!docs/*
+!tests/*.py
+!tests/*.js
+!tests/sample_*.txt
+!tools/*.py

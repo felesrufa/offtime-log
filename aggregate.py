@@ -4,25 +4,39 @@
 retainer-log 集計スクリプト
 
 log.txt は歯科矯正の保定装置（マウスピース）を外していた時刻の記録。
-1日ごとに【朝】【昼】【夜】の区分があり、各区分に
+次の2種類の行形式が1つのファイルに混在してよい（並び順も問わない）。
+
+(A) 手書き形式
+    1日ごとに【朝】【昼】【夜】の区分があり、各区分に
     「外した時刻-つけた時刻」のペアが、複数あれば「、」区切りで並ぶ。
 
-例:
-    2026/1/27（火）
-    【朝】6:18-6:52
-    【夜】17:30-17:43、20:01-20:33
+        2026/1/27（火）
+        【朝】6:18-6:52
+        【夜】17:30-17:43、20:01-20:33
+
+(B) 打刻形式（iOSショートカットが背面タップで追記する行）
+    1行 = 1打刻。「外」= 外した、「着」= つけた。
+
+        2026/09/13 08:24 外
+        2026/09/13 09:22 着
+
+    「外」→「着」の順に組にして、外した時刻で区分を決める
+    （11:00 より前=【朝】、16:00 より前=【昼】、それ以降=【夜】）。
 
 使い方:
     python aggregate.py                    log.txt 全体（月ごと＋全期間通算）
     python aggregate.py other.txt          別ファイルを集計
     python aggregate.py --month 2026-02    2026年2月だけ集計
     python aggregate.py other.txt -m 2026-02
+    python aggregate.py --json             画面表示の代わりに JSON を出力（PWA との突き合わせ用）
+    python aggregate.py --today 2026-09-13 「今日」を固定する（テスト用。省略時は実日付）
 """
 
 import sys
 import re
 import argparse
-from datetime import date, timedelta
+import json
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # PowerShellの画面にそのまま表示する想定。文字化けする場合は
@@ -38,10 +52,16 @@ LABELS = ["朝", "昼", "夜"]
 DATE_RE = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})（(.)）\s*$")
 SECTION_RE = re.compile(r"^【(朝|昼|夜)】(.*)$")
 TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+TAP_RE = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})[ 　]+(\d{1,2}):(\d{2})[ 　]*(外|着)[ 　]*$")
 MONTH_ARG_RE = re.compile(r"^(\d{4})-(\d{1,2})$")
+DAY_ARG_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
 
 DAILY_LIMIT_MIN = 240  # 1日の目標上限(4時間)
 BAR_WIDTH = 20
+
+# 打刻形式の区分判定。外した時刻がこの境界より前かどうかで決める。
+NOON_START_MIN = 11 * 60     # これより前に外した → 【朝】
+EVENING_START_MIN = 16 * 60  # これより前に外した → 【昼】、以降 → 【夜】
 
 
 def format_hm(minutes):
@@ -52,12 +72,41 @@ def format_hm(minutes):
     return f"{sign}{h}時間{m}分"
 
 
+def format_time(minutes):
+    """分 -> "H:MM"。1440 は "24:00"（日跨ぎ分割の終端）。"""
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
+def day_label(d):
+    """date -> "2026/9/13（日）"（手書き形式の日付行と同じ見た目）。"""
+    return f"{d.year}/{d.month}/{d.day}（{WEEKDAY_CHARS[d.weekday()]}）"
+
+
 def add_warning(warnings, when, text):
     """
     warnings に構造化した警告を追記する。
     when: 関連する date、または日付が特定できない場合は None。
     """
     warnings.append({"date": when, "text": text})
+
+
+def new_record(d, weekday_char, raw):
+    return {
+        "date": d,
+        "weekday_char": weekday_char,
+        "raw": raw,
+        "sections": {label: [] for label in LABELS},
+        "present_labels": set(),
+    }
+
+
+def section_of(start_min):
+    """打刻形式: 外した時刻(分)から区分を決める。"""
+    if start_min < NOON_START_MIN:
+        return "朝"
+    if start_min < EVENING_START_MIN:
+        return "昼"
+    return "夜"
 
 
 def parse_time(token):
@@ -109,10 +158,11 @@ def parse_pair(chunk, label, day_str, when, warnings):
     return (start_min, end_min)
 
 
-def parse_log(path):
+def parse_log_text(text):
     """
-    log.txt を読み込み、日ごとのレコードのリストを返す。
-    各レコード:
+    log.txt の中身を解析し、(手書き形式の日次レコード, 打刻イベント, warnings) を返す。
+
+    手書き形式のレコード:
         {
             "date": date または None(パース失敗時),
             "weekday_char": 元テキストの曜日文字,
@@ -120,18 +170,28 @@ def parse_log(path):
             "sections": {"朝": [(start,end),...], "昼": [...], "夜": [...]},
             "present_labels": {"朝","夜"} のような、行として存在した区分の集合,
         }
+    打刻イベント: {"dt": datetime, "kind": "外"|"着", "raw": 元の行, "lineno": 行番号}
     warnings: {"date": date または None, "text": str} のリスト
     """
     days = []
+    taps = []
     warnings = []
     current = None
 
-    with open(path, "r", encoding="utf-8") as f:
-        lines = f.read().splitlines()
-
-    for lineno, raw_line in enumerate(lines, start=1):
+    for lineno, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
+            continue
+
+        m = TAP_RE.match(line)
+        if m:
+            year, month, day, hour, minute, kind = m.groups()
+            try:
+                dt = datetime(int(year), int(month), int(day), int(hour), int(minute))
+            except ValueError:
+                add_warning(warnings, None, f"[日付不正] {line} (行{lineno}): 存在しない日時です")
+                continue
+            taps.append({"dt": dt, "kind": kind, "raw": line, "lineno": lineno})
             continue
 
         m = DATE_RE.match(line)
@@ -142,13 +202,7 @@ def parse_log(path):
             except ValueError:
                 d = None
                 add_warning(warnings, None, f"[日付不正] {line} (行{lineno}): カレンダー上存在しない日付です")
-            current = {
-                "date": d,
-                "weekday_char": wd_char,
-                "raw": line,
-                "sections": {label: [] for label in LABELS},
-                "present_labels": set(),
-            }
+            current = new_record(d, wd_char, line)
             days.append(current)
             continue
 
@@ -158,25 +212,10 @@ def parse_log(path):
             current["present_labels"].add(label)
             day_str = current["raw"]
             when = current["date"]
-            chunks = rest.split("、")
-            pairs = []
-            for chunk in chunks:
+            for chunk in rest.split("、"):
                 pair = parse_pair(chunk, label, day_str, when, warnings)
                 if pair is not None:
-                    pairs.append(pair)
-            # 同一区分内の重なりチェック
-            pairs_sorted = sorted(pairs, key=lambda p: p[0])
-            for i in range(1, len(pairs_sorted)):
-                prev_start, prev_end = pairs_sorted[i - 1]
-                cur_start, cur_end = pairs_sorted[i]
-                if cur_start < prev_end:
-                    add_warning(
-                        warnings, when,
-                        f"[重なり] {day_str} 【{label}】: "
-                        f"{prev_start//60}:{prev_start%60:02d}-{prev_end//60}:{prev_end%60:02d} と "
-                        f"{cur_start//60}:{cur_start%60:02d}-{cur_end//60}:{cur_end%60:02d} が重なっています",
-                    )
-            current["sections"][label] = pairs
+                    current["sections"][label].append(pair)
             continue
 
         add_warning(
@@ -184,11 +223,104 @@ def parse_log(path):
             f"[解析不能] 行{lineno}: '{raw_line}' を認識できませんでした",
         )
 
-    return days, warnings
+    return days, taps, warnings
+
+
+def build_tap_days(taps, warnings, today):
+    """
+    打刻イベントを時刻順に並べ、「外」→「着」を組にして日次レコードにする。
+    戻り値: ({date: record}, ongoing)
+    ongoing: 今日の「外」で「着」がまだ無いもの（外し中）。無ければ None。
+    """
+    events = sorted(taps, key=lambda t: (t["dt"], t["lineno"]))
+    by_date = {}
+
+    def add_pair(d, start_min, end_min):
+        if end_min <= start_min:
+            # 0分のペアは「間違えてすぐ打ち直した」扱いで無視する
+            return
+        if d not in by_date:
+            by_date[d] = new_record(d, WEEKDAY_CHARS[d.weekday()], day_label(d))
+        rec = by_date[d]
+        label = section_of(start_min)
+        rec["sections"][label].append((start_min, end_min))
+        rec["present_labels"].add(label)
+
+    pending = None
+    ongoing = None
+    for ev in events:
+        if ev["kind"] == "外":
+            if pending is not None:
+                add_warning(
+                    warnings, pending["dt"].date(),
+                    f"[打刻不整合] {pending['raw']}: 「着」の打刻がないまま次の「外」があります（この「外」は無視）",
+                )
+            pending = ev
+            continue
+
+        # kind == "着"
+        if pending is None:
+            add_warning(warnings, ev["dt"].date(), f"[打刻不整合] {ev['raw']}: 直前に「外」の打刻がありません（無視）")
+            continue
+        s, e = pending["dt"], ev["dt"]
+        sd, ed = s.date(), e.date()
+        s_min = s.hour * 60 + s.minute
+        e_min = e.hour * 60 + e.minute
+        if sd == ed:
+            add_pair(sd, s_min, e_min)
+        elif ed == sd + timedelta(days=1):
+            add_warning(
+                warnings, sd,
+                f"[日跨ぎ] {pending['raw']} → {ev['raw']}: 日付をまたいでいるので 24:00 で分割しました",
+            )
+            add_pair(sd, s_min, 24 * 60)
+            add_pair(ed, 0, e_min)
+        else:
+            add_warning(
+                warnings, sd,
+                f"[打刻不整合] {pending['raw']} → {ev['raw']}: 2日以上離れています（無視）",
+            )
+        pending = None
+
+    if pending is not None:
+        if pending["dt"].date() == today:
+            ongoing = pending
+        else:
+            add_warning(warnings, pending["dt"].date(), f"[打刻不整合] {pending['raw']}: 「着」の打刻がありません")
+
+    return by_date, ongoing
+
+
+def merge_days(structured, tap_by_date, warnings):
+    """手書き形式と打刻形式のレコードを合わせる。同じ日付があれば合算して警告。"""
+    days = list(structured)
+    dated = {}
+    for rec in structured:
+        if rec["date"] is not None:
+            dated[rec["date"]] = rec
+    for d in sorted(tap_by_date):
+        trec = tap_by_date[d]
+        if d in dated:
+            rec = dated[d]
+            for label in LABELS:
+                if trec["sections"][label]:
+                    rec["sections"][label].extend(trec["sections"][label])
+                    rec["present_labels"].add(label)
+            add_warning(warnings, d, f"[重複日付] {rec['raw']}: 手書き形式と打刻形式の両方に記録があります（合算しました）")
+        else:
+            days.append(trec)
+    return days
+
+
+def sort_days(days):
+    """新しい日付が先頭になるよう並べ替える。日付不明のレコードは末尾。"""
+    dated = sorted([r for r in days if r["date"] is not None], key=lambda r: r["date"], reverse=True)
+    undated = [r for r in days if r["date"] is None]
+    return dated + undated
 
 
 def check_dates(days, warnings):
-    """曜日不一致・日付の飛びをチェックする。"""
+    """曜日不一致・重複・日付の飛びをチェックする（days は降順ソート済み前提）。"""
     for rec in days:
         if rec["date"] is None:
             continue
@@ -196,11 +328,13 @@ def check_dates(days, warnings):
         if actual_wd != rec["weekday_char"]:
             add_warning(warnings, rec["date"], f"[曜日不一致] {rec['raw']}: 実際の曜日は「{actual_wd}」です")
 
-    # ファイルは新しい日付が先頭の降順想定。連続する行の日付差が1日でない箇所を検出。
     dated = [rec for rec in days if rec["date"] is not None]
     for i in range(1, len(dated)):
         prev_d = dated[i - 1]["date"]
         cur_d = dated[i]["date"]
+        if cur_d == prev_d:
+            add_warning(warnings, prev_d, f"[重複日付] {dated[i]['raw']} が2回あります")
+            continue
         expected = prev_d - timedelta(days=1)
         if cur_d != expected:
             # 新しい方(prev_d)の月に紐付けて表示する
@@ -211,8 +345,27 @@ def check_dates(days, warnings):
             )
 
 
-def check_missing_sections(rec, warnings):
-    """朝・夜は常に警告。昼は土日のみ警告(平日の昼欠けは正常)。"""
+def check_overlaps(days, warnings):
+    """同一区分内でペアの時間帯が重なっていないかチェックする。"""
+    for rec in days:
+        for label in LABELS:
+            pairs = sorted(rec["sections"][label], key=lambda p: p[0])
+            for i in range(1, len(pairs)):
+                prev_start, prev_end = pairs[i - 1]
+                cur_start, cur_end = pairs[i]
+                if cur_start < prev_end:
+                    add_warning(
+                        warnings, rec["date"],
+                        f"[重なり] {rec['raw']} 【{label}】: "
+                        f"{format_time(prev_start)}-{format_time(prev_end)} と "
+                        f"{format_time(cur_start)}-{format_time(cur_end)} が重なっています",
+                    )
+
+
+def check_missing_sections(rec, warnings, today):
+    """朝・夜は常に警告。昼は土日のみ警告(平日の昼欠けは正常)。今日はまだ途中なので見ない。"""
+    if rec["date"] == today:
+        return
     day_str = rec["raw"]
     present = rec["present_labels"]
 
@@ -251,6 +404,122 @@ def summarize(days):
     return daily_totals, section_records
 
 
+def month_key_of(d):
+    return (d.year, d.month)
+
+
+def make_stats(daily_totals, section_records):
+    """合計・平均・最長・最短などの数値を辞書にまとめる（表示・JSON 共通）。"""
+    total = sum(t for _, t in daily_totals)
+    section_total = sum(m for _, _, m in section_records)
+    stats = {
+        "total": total,
+        "days": len(daily_totals),
+        "sections": len(section_records),
+        "section_total": section_total,
+        "longest": None,
+        "shortest": None,
+    }
+    if section_records:
+        longest = max(section_records, key=lambda x: x[2])
+        shortest = min(section_records, key=lambda x: x[2])
+        stats["longest"] = {"minutes": longest[2], "raw": longest[0]["raw"], "label": longest[1]}
+        stats["shortest"] = {"minutes": shortest[2], "raw": shortest[0]["raw"], "label": shortest[1]}
+    return stats
+
+
+def analyze(text, today):
+    """log.txt の中身を解析・検査し、(days, warnings, ongoing, daily_totals, section_records) を返す。"""
+    structured, taps, warnings = parse_log_text(text)
+    tap_by_date, ongoing = build_tap_days(taps, warnings, today)
+    days = sort_days(merge_days(structured, tap_by_date, warnings))
+    check_dates(days, warnings)
+    check_overlaps(days, warnings)
+    for rec in days:
+        if rec["date"] is not None:
+            check_missing_sections(rec, warnings, today)
+
+    daily_totals, section_records = summarize(days)
+
+    # 1日の合計が4時間(240分)を超える日を警告
+    for rec, total in daily_totals:
+        if total > DAILY_LIMIT_MIN:
+            add_warning(warnings, rec["date"], f"[4時間超過] {rec['raw']}: 合計 {format_hm(total)}")
+
+    return days, warnings, ongoing, daily_totals, section_records
+
+
+def build_report(text, today, target_month=None):
+    """
+    集計結果をひとつの辞書にまとめる。画面表示も JSON 出力もこれを元にする。
+    target_month が実在しない月なら {"error": ...} を返す。
+    """
+    days, warnings, ongoing, daily_totals, section_records = analyze(text, today)
+
+    report = {
+        "today": today.isoformat(),
+        "ongoing": None,
+        "overall": None,
+        "months": [],
+        "dateless_warnings": [],
+    }
+    if ongoing is not None:
+        report["ongoing"] = {
+            "date": ongoing["dt"].date().isoformat(),
+            "start_min": ongoing["dt"].hour * 60 + ongoing["dt"].minute,
+            "raw": ongoing["raw"],
+        }
+
+    if not daily_totals:
+        report["dateless_warnings"] = [w["text"] for w in warnings if w["date"] is None]
+        return report
+
+    month_keys = sorted({month_key_of(rec["date"]) for rec, _ in daily_totals}, reverse=True)
+    if target_month is not None:
+        if target_month not in month_keys:
+            y, m = target_month
+            return {"error": f"{y}年{m}月のデータが見つかりません。"}
+        month_keys = [target_month]
+
+    if target_month is None and len(month_keys) > 1:
+        min_d = min(rec["date"] for rec, _ in daily_totals)
+        max_d = max(rec["date"] for rec, _ in daily_totals)
+        report["overall"] = {
+            "from": min_d.strftime("%Y/%m"),
+            "to": max_d.strftime("%Y/%m"),
+            "stats": make_stats(daily_totals, section_records),
+        }
+
+    for y, m in month_keys:
+        m_daily = [(rec, t) for rec, t in daily_totals if month_key_of(rec["date"]) == (y, m)]
+        m_sections = [(rec, l, mins) for rec, l, mins in section_records if month_key_of(rec["date"]) == (y, m)]
+        m_warns = [w for w in warnings if w["date"] is not None and month_key_of(w["date"]) == (y, m)]
+        m_warns = sorted(m_warns, key=lambda w: w["date"], reverse=True)
+        report["months"].append({
+            "year": y,
+            "month": m,
+            "stats": make_stats(m_daily, m_sections),
+            "days": [
+                {
+                    "date": rec["date"].isoformat(),
+                    "weekday": WEEKDAY_CHARS[rec["date"].weekday()],
+                    "raw": rec["raw"],
+                    "total": total,
+                    "sections": {label: [list(p) for p in rec["sections"][label]] for label in LABELS},
+                }
+                for rec, total in m_daily
+            ],
+            "warnings": [w["text"] for w in m_warns],
+        })
+
+    if target_month is None:
+        report["dateless_warnings"] = [w["text"] for w in warnings if w["date"] is None]
+
+    return report
+
+
+# ---------------------------------------------------------------- 表示 ----
+
 def make_bar(minutes, width=BAR_WIDTH, limit=DAILY_LIMIT_MIN):
     """4時間(limit)を基準にした割合バーを作る。"""
     ratio = minutes / limit if limit else 0
@@ -262,49 +531,85 @@ def make_bar(minutes, width=BAR_WIDTH, limit=DAILY_LIMIT_MIN):
     return f"[{bar}] {pct:3d}%{marker}"
 
 
-def print_stats_block(daily_totals, section_records):
+def print_stats_block(stats):
     """月合計・月平均などの数値をまとめて表示する。"""
-    month_total = sum(total for _, total in daily_totals)
-    num_days = len(daily_totals)
-    month_avg = month_total / num_days if num_days else 0
+    num_days = stats["days"]
+    avg = stats["total"] / num_days if num_days else 0
+    num_sections = stats["sections"]
+    section_avg = stats["section_total"] / num_sections if num_sections else 0
 
-    num_sections = len(section_records)
-    section_avg = sum(m for _, _, m in section_records) / num_sections if num_sections else 0
-
-    print(f"合計時間          : {format_hm(month_total)}")
-    print(f"平均時間(1日あたり): {format_hm(round(month_avg))} (記録日数 {num_days}日)")
+    print(f"合計時間          : {format_hm(stats['total'])}")
+    print(f"平均時間(1日あたり): {format_hm(round(avg))} (記録日数 {num_days}日)")
     print(f"1回あたりの平均時間: {format_hm(round(section_avg))} (外した回数 {num_sections}回)")
 
-    if section_records:
-        longest = max(section_records, key=lambda x: x[2])
-        shortest = min(section_records, key=lambda x: x[2])
-        print(f"いちばん長く外した時間: {format_hm(longest[2])} ({longest[0]['raw']} 【{longest[1]}】)")
-        print(f"いちばん短く外した時間: {format_hm(shortest[2])} ({shortest[0]['raw']} 【{shortest[1]}】)")
+    if stats["longest"]:
+        lg, sh = stats["longest"], stats["shortest"]
+        print(f"いちばん長く外した時間: {format_hm(lg['minutes'])} ({lg['raw']} 【{lg['label']}】)")
+        print(f"いちばん短く外した時間: {format_hm(sh['minutes'])} ({sh['raw']} 【{sh['label']}】)")
 
 
-def print_daily_table(daily_totals):
+def print_daily_table(days):
     print(f"日ごとの内訳  (目標4時間 = バー全埋め)")
     print("-" * 62)
-    for rec, total in daily_totals:
-        d = rec["date"]
-        wd = WEEKDAY_CHARS[d.weekday()]
-        label = f"{d.month:02d}/{d.day:02d}({wd})"
-        print(f"{label}  {format_hm(total):>8}  {make_bar(total)}")
+    for d in days:
+        y, m, dd = (int(x) for x in d["date"].split("-"))
+        label = f"{m:02d}/{dd:02d}({d['weekday']})"
+        print(f"{label}  {format_hm(d['total']):>8}  {make_bar(d['total'])}")
     print("-" * 62)
 
 
-def print_warnings(month_warnings):
-    print(f"警告 ({len(month_warnings)}件)")
+def print_warnings(texts):
+    print(f"警告 ({len(texts)}件)")
     print("-" * 62)
-    if month_warnings:
-        for w in month_warnings:
-            print(w["text"])
+    if texts:
+        for t in texts:
+            print(t)
     else:
         print("警告はありません。")
 
 
-def month_key_of(d):
-    return (d.year, d.month)
+def print_report(report, now):
+    print("=" * 62)
+    print("保定装置(マウスピース)を外していた時間の集計")
+    print("=" * 62)
+
+    if report["ongoing"]:
+        og = report["ongoing"]
+        elapsed = (now.hour * 60 + now.minute) - og["start_min"]
+        print(f"※ 現在 外し中: {og['raw']} から（{format_hm(max(elapsed, 0))} 経過。今日の合計には未加算）")
+
+    if not report["months"]:
+        print("有効な日次データがありません。")
+        if report["dateless_warnings"]:
+            print()
+            print_warnings(report["dateless_warnings"])
+        return
+
+    if report["overall"]:
+        ov = report["overall"]
+        print()
+        print("=" * 62)
+        print(f" 全期間 通算 ({ov['from']} - {ov['to']})")
+        print("=" * 62)
+        print_stats_block(ov["stats"])
+
+    for mo in report["months"]:
+        print()
+        print("=" * 62)
+        print(f" {mo['year']}年{mo['month']:02d}月  (月合計 {format_hm(mo['stats']['total'])} / 回数 {mo['stats']['sections']}回)")
+        print("=" * 62)
+        print_stats_block(mo["stats"])
+        print()
+        print_daily_table(mo["days"])
+        print()
+        print_warnings(mo["warnings"])
+
+    if report["dateless_warnings"]:
+        print()
+        print("=" * 62)
+        print(" 月に紐づかない警告")
+        print("=" * 62)
+        print_warnings(report["dateless_warnings"])
 
 
 def main():
@@ -313,6 +618,8 @@ def main():
     parser = argparse.ArgumentParser(description="保定装置を外していた時間の集計")
     parser.add_argument("file", nargs="?", default=None, help="log.txtへのパス(省略時はスクリプト横のlog.txt)")
     parser.add_argument("--month", "-m", default=None, help="集計対象を絞り込む月。形式: YYYY-MM (例: 2026-02)")
+    parser.add_argument("--json", action="store_true", help="画面表示の代わりに JSON を出力する")
+    parser.add_argument("--today", default=None, help="「今日」を固定する。形式: YYYY-MM-DD (テスト用)")
     args = parser.parse_args()
 
     path = Path(args.file) if args.file else default_path
@@ -328,77 +635,27 @@ def main():
             sys.exit(1)
         target_month = (int(m.group(1)), int(m.group(2)))
 
-    days, warnings = parse_log(path)
-    check_dates(days, warnings)
-    for rec in days:
-        if rec["date"] is not None:
-            check_missing_sections(rec, warnings)
-
-    all_daily_totals, all_section_records = summarize(days)
-
-    # 1日の合計が4時間(240分)を超える日を警告
-    for rec, total in all_daily_totals:
-        if total > DAILY_LIMIT_MIN:
-            add_warning(warnings, rec["date"], f"[4時間超過] {rec['raw']}: 合計 {format_hm(total)}")
-
-    print("=" * 62)
-    print("保定装置(マウスピース)を外していた時間の集計")
-    print("=" * 62)
-
-    if not all_daily_totals:
-        print("有効な日次データがありません。")
-        return
-
-    month_keys = sorted({month_key_of(rec["date"]) for rec, _ in all_daily_totals}, reverse=True)
-
-    if target_month is not None:
-        if target_month not in month_keys:
-            y, m = target_month
-            print(f"{y}年{m}月のデータが見つかりません。")
+    now = datetime.now()
+    today = now.date()
+    if args.today:
+        m = DAY_ARG_RE.match(args.today)
+        if not m:
+            print(f"--today の形式が不正です: '{args.today}' (例: 2026-09-13)")
             sys.exit(1)
-        month_keys = [target_month]
+        today = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
-    def warnings_for(pred):
-        return [w for w in warnings if w["date"] is not None and pred(w["date"])]
+    with open(path, "r", encoding="utf-8-sig") as f:
+        text = f.read()
 
-    # ---- 全期間 通算(複数月あり、かつ月指定なしのときだけ表示) ----
-    if target_month is None and len(month_keys) > 1:
-        min_d = min(rec["date"] for rec, _ in all_daily_totals)
-        max_d = max(rec["date"] for rec, _ in all_daily_totals)
-        print()
-        print("=" * 62)
-        print(f" 全期間 通算 ({min_d.strftime('%Y/%m')} - {max_d.strftime('%Y/%m')})")
-        print("=" * 62)
-        print_stats_block(all_daily_totals, all_section_records)
+    report = build_report(text, today, target_month)
+    if "error" in report:
+        print(report["error"])
+        sys.exit(1)
 
-    # ---- 月ごとのセクション ----
-    for y, m in month_keys:
-        month_days = [rec for rec, _ in all_daily_totals if month_key_of(rec["date"]) == (y, m)]
-        month_daily_totals = [(rec, total) for rec, total in all_daily_totals if month_key_of(rec["date"]) == (y, m)]
-        month_section_records = [
-            (rec, label, mins) for rec, label, mins in all_section_records if month_key_of(rec["date"]) == (y, m)
-        ]
-        month_total = sum(total for _, total in month_daily_totals)
-        month_warns = warnings_for(lambda d, y=y, m=m: month_key_of(d) == (y, m))
-
-        print()
-        print("=" * 62)
-        print(f" {y}年{m:02d}月  (月合計 {format_hm(month_total)} / 回数 {len(month_section_records)}回)")
-        print("=" * 62)
-        print_stats_block(month_daily_totals, month_section_records)
-        print()
-        print_daily_table(month_daily_totals)
-        print()
-        print_warnings(sorted(month_warns, key=lambda w: w["date"], reverse=True))
-
-    # ---- 日付に紐づかない警告(月指定なしのときだけ) ----
-    dateless = [w for w in warnings if w["date"] is None]
-    if target_month is None and dateless:
-        print()
-        print("=" * 62)
-        print(" 月に紐づかない警告")
-        print("=" * 62)
-        print_warnings(dateless)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print_report(report, now)
 
 
 if __name__ == "__main__":

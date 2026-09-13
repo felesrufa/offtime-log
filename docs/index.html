@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>リテーナー記録</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="リテーナー">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<link rel="icon" href="./icon-192.png" type="image/png">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f2f2f7;
+    --card: #ffffff;
+    --text: #1c1c1e;
+    --muted: #6e6e73;
+    --line: #e5e5ea;
+    --accent: #0f766e;
+    --accent-soft: #d7f0ec;
+    --warn: #b45309;
+    --warn-soft: #fef3c7;
+    --over: #dc2626;
+    --bar-bg: #e5e5ea;
+    --pill: #e9e9ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --card: #1c1c1e;
+      --text: #f2f2f7;
+      --muted: #98989d;
+      --line: #2c2c2e;
+      --accent: #2dd4bf;
+      --accent-soft: #113c38;
+      --warn: #fbbf24;
+      --warn-soft: #3b2a08;
+      --over: #f87171;
+      --bar-bg: #2c2c2e;
+      --pill: #2c2c2e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-text-size-adjust: 100%;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 12px 14px 40px; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 2px 10px; }
+  header h1 { font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  header .loaded { font-size: 12px; color: var(--muted); text-align: right; }
+
+  .card { background: var(--card); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 0 rgba(0,0,0,.04); }
+  .card h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; text-transform: none; letter-spacing: .02em; }
+
+  .btn {
+    display: block; width: 100%; border: 0; border-radius: 12px; padding: 14px 16px;
+    font: inherit; font-size: 16px; font-weight: 600; color: #fff; background: var(--accent);
+    cursor: pointer; text-align: center;
+  }
+  .btn:active { opacity: .85; }
+  .btn.secondary { background: var(--pill); color: var(--text); font-weight: 500; font-size: 14px; padding: 10px 12px; }
+  input[type=file] { display: none; }
+
+  .today-total { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 6px; }
+  .today-total .big { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .today-total .sub { color: var(--muted); font-size: 13px; }
+  .today-total .big.over { color: var(--over); }
+  .bar { height: 10px; background: var(--bar-bg); border-radius: 6px; overflow: hidden; position: relative; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 6px; transition: width .3s; }
+  .bar > i.over { background: var(--over); }
+  .bar.small { height: 7px; }
+  .ongoing {
+    margin-top: 10px; padding: 8px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn);
+    font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .ongoing::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: blink 1.4s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  .sections { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .sec { background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+  .sec .lab { font-size: 12px; color: var(--muted); }
+  .sec .val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sec .pairs { font-size: 11px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding: 2px 2px 10px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: 0 0 auto; border: 0; border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 14px; font-weight: 500;
+    background: var(--pill); color: var(--text); cursor: pointer;
+  }
+  .tab.active { background: var(--accent); color: #fff; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .stat .lab { font-size: 12px; color: var(--muted); }
+  .stat .val { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .note { font-size: 12px; color: var(--muted); }
+  .stat.wide { grid-column: 1 / -1; }
+
+  .days { list-style: none; margin: 0; padding: 0; }
+  .day { border-top: 1px solid var(--line); }
+  .day:first-child { border-top: 0; }
+  .day-row {
+    display: grid; grid-template-columns: 74px 1fr 66px; align-items: center; gap: 10px; padding: 9px 0;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .day-row .d { font-weight: 600; font-size: 14px; }
+  .day-row .d .wd { color: var(--muted); font-weight: 500; font-size: 12px; margin-left: 2px; }
+  .day-row .d.holiday { color: var(--over); }
+  .day-row .d.holiday .wd { color: var(--over); }
+  .day-row .t { text-align: right; font-size: 14px; }
+  .day-row .t.over { color: var(--over); font-weight: 600; }
+  .day-detail { display: none; padding: 0 0 10px 4px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .day.open .day-detail { display: block; }
+  .day-detail div { padding: 2px 0; }
+  .day-detail b { color: var(--text); font-weight: 600; margin-right: 6px; }
+
+  .warns { list-style: none; margin: 0; padding: 0; }
+  .warns li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; word-break: break-all; }
+  .warns li:first-child { border-top: 0; }
+  .warns li .tag { display: inline-block; font-size: 11px; font-weight: 600; color: var(--warn); background: var(--warn-soft); border-radius: 6px; padding: 1px 6px; margin-right: 6px; vertical-align: 1px; }
+  .badge { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 12px; font-weight: 700; text-align: center; margin-left: 6px; }
+  .badge.zero { background: var(--pill); color: var(--muted); }
+
+  .empty { text-align: center; color: var(--muted); padding: 30px 10px; font-size: 14px; }
+  .empty p { margin: 6px 0; }
+  .hint { font-size: 12px; color: var(--muted); margin: 8px 2px 0; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row .btn { flex: 1; }
+  .error { color: var(--over); font-size: 13px; margin-top: 8px; }
+  footer { text-align: center; font-size: 11px; color: var(--muted); padding: 10px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>リテーナー記録</h1>
+    <div class="loaded" id="loadedAt"></div>
+  </header>
+
+  <div class="card" id="loaderCard">
+    <button class="btn" id="pickBtn">log.txt を読み込む</button>
+    <input type="file" id="fileInput" accept=".txt,text/plain">
+    <div class="error" id="loadError" hidden></div>
+    <div class="hint">iCloud Drive › Shortcuts › retainer-log › log.txt を選びます。読み込んだ内容はこの端末に保存され、次回はすぐ表示されます。</div>
+  </div>
+
+  <div id="content"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script src="./aggregate.js"></script>
+<script>
+(function () {
+  "use strict";
+  const LS_TEXT = "retainer-log:text";
+  const LS_AT = "retainer-log:loadedAt";
+  const LIMIT = RetainerLog.DAILY_LIMIT_MIN;
+  const fmt = RetainerLog.formatHm;
+  const fmtT = RetainerLog.formatTime;
+
+  const $ = (id) => document.getElementById(id);
+  const content = $("content");
+  let state = { text: null, loadedAt: null, report: null, month: null, timer: null };
+
+  // ---------------------------------------------------------------- 保存/読込
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+
+  function setText(text, at) {
+    state.text = text;
+    state.loadedAt = at || new Date().toISOString();
+    lsSet(LS_TEXT, text);
+    lsSet(LS_AT, state.loadedAt);
+    state.month = null;
+    render();
+  }
+
+  function showError(msg) {
+    const el = $("loadError");
+    el.textContent = msg || "";
+    el.hidden = !msg;
+  }
+
+  function readFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => { showError(""); setText(String(reader.result)); };
+    reader.onerror = () => showError("ファイルを読み込めませんでした。");
+    reader.readAsText(file, "utf-8");
+  }
+
+  $("pickBtn").addEventListener("click", () => { $("fileInput").value = ""; $("fileInput").click(); });
+  $("fileInput").addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; if (f) readFile(f); });
+
+  // ショートカットから #d=<base64 の log.txt> で開かれた場合
+  function decodeHashData(hash) {
+    let s = hash;
+    try { s = decodeURIComponent(s); } catch (e) { /* そのまま */ }
+    s = s.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    const bin = atob(s);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    let text = new TextDecoder("utf-8").decode(bytes);
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    return text;
+  }
+  function importFromHash() {
+    const m = /^#d=(.+)$/.exec(location.hash || "");
+    if (!m) return false;
+    try {
+      const text = decodeHashData(m[1]);
+      history.replaceState(null, "", location.pathname + location.search);
+      setText(text);
+      return true;
+    } catch (e) {
+      showError("URL からデータを読めませんでした: " + e.message);
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------- 表示
+  function todayIso() {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+  }
+  function nowMin() { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); }
+  function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+  function pct(min) { return Math.min(100, Math.round(min / LIMIT * 100)); }
+  function barHtml(min, small) {
+    return `<div class="bar${small ? " small" : ""}"><i class="${min > LIMIT ? "over" : ""}" style="width:${pct(min)}%"></i></div>`;
+  }
+  function loadedLabel() {
+    if (!state.loadedAt) return "";
+    const d = new Date(state.loadedAt);
+    if (isNaN(d)) return "";
+    return `最終読込 ${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  function splitTag(text) {
+    const m = /^\[([^\]]+)\]\s*(.*)$/.exec(text);
+    return m ? `<span class="tag">${esc(m[1])}</span>${esc(m[2])}` : esc(text);
+  }
+  function avgLine(total, n, unit) {
+    if (!n) return "—";
+    return fmt(RetainerLog.pyRound(total / n));
+  }
+
+  function render() {
+    $("loadedAt").textContent = loadedLabel();
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+
+    if (state.text === null) {
+      content.innerHTML = `<div class="card empty"><p>まだデータがありません。</p><p>上のボタンから log.txt を読み込んでください。</p></div>`;
+      $("footer").textContent = "";
+      return;
+    }
+
+    const today = todayIso();
+    const report = RetainerLog.buildReport(state.text, { today });
+    state.report = report;
+    const months = report.months;
+    const keys = months.map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`);
+    if (report.overall) keys.push("all");
+    if (!state.month || !keys.includes(state.month)) state.month = keys[0] || null;
+
+    let html = "";
+
+    // ---- 今日
+    html += renderToday(report, today);
+
+    if (!months.length) {
+      html += `<div class="card empty"><p>有効な日次データがありません。</p></div>`;
+    } else {
+      // ---- 月タブ
+      html += `<div class="tabs">` + months.map((m, i) =>
+        `<button class="tab${state.month === keys[i] ? " active" : ""}" data-key="${keys[i]}">${m.year}年${m.month}月</button>`
+      ).join("") + (report.overall ? `<button class="tab${state.month === "all" ? " active" : ""}" data-key="all">全期間</button>` : "") + `</div>`;
+
+      if (state.month === "all") {
+        const ov = report.overall;
+        html += renderStats(`全期間 通算（${ov.from} 〜 ${ov.to}）`, ov.stats);
+        html += `<div class="hint">日ごとの内訳と警告は各月のタブで確認できます。</div>`;
+      } else {
+        const mo = months[keys.indexOf(state.month)];
+        html += renderStats(`${mo.year}年${mo.month}月`, mo.stats);
+        html += renderDays(mo, today);
+        html += renderWarnings(`${mo.year}年${mo.month}月の警告`, mo.warnings);
+      }
+    }
+
+    if (report.dateless_warnings.length) {
+      html += renderWarnings("月に紐づかない警告", report.dateless_warnings);
+    }
+
+    content.innerHTML = html;
+    $("footer").textContent = `目標: 1日の合計 ${fmt(LIMIT)} 以下 ／ 区分は外した時刻で判定（〜10:59 朝、〜15:59 昼、16:00〜 夜）`;
+
+    content.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => { state.month = b.dataset.key; render(); }));
+    content.querySelectorAll(".day-row").forEach((r) => r.addEventListener("click", () => r.parentElement.classList.toggle("open")));
+
+    if (report.ongoing) {
+      state.timer = setInterval(updateOngoing, 30 * 1000);
+    }
+  }
+
+  function findToday(report, today) {
+    for (const mo of report.months) {
+      for (const d of mo.days) if (d.date === today) return d;
+    }
+    return null;
+  }
+
+  function ongoingElapsed(report) {
+    if (!report.ongoing) return 0;
+    return Math.max(0, nowMin() - report.ongoing.start_min);
+  }
+
+  function renderToday(report, today) {
+    const d = findToday(report, today);
+    const base = d ? d.total : 0;
+    const extra = ongoingElapsed(report);
+    const total = base + extra;
+    let html = `<div class="card" id="todayCard"><h2>今日 ${today.slice(5).replace("-", "/")}</h2>`;
+    html += `<div class="today-total"><span class="big${total > LIMIT ? " over" : ""}" id="todayTotal">${fmt(total)}</span><span class="sub">/ ${fmt(LIMIT)}${extra ? "（外し中を含む）" : ""}</span></div>`;
+    html += `<div id="todayBar">${barHtml(total)}</div>`;
+    if (report.ongoing) {
+      html += `<div class="ongoing">外し中 ${fmtT(report.ongoing.start_min)} 〜 <span id="ongoingElapsed">${fmt(extra)}</span></div>`;
+    }
+    if (d) {
+      html += `<div class="sections">` + RetainerLog.LABELS.map((label) => {
+        const pairs = d.sections[label];
+        const mins = pairs.reduce((a, p) => a + (p[1] - p[0]), 0);
+        return `<div class="sec"><div class="lab">${label}</div><div class="val">${pairs.length ? fmt(mins) : "—"}</div><div class="pairs">${pairs.map((p) => `${fmtT(p[0])}-${fmtT(p[1])}`).join("、")}</div></div>`;
+      }).join("") + `</div>`;
+    } else if (!report.ongoing) {
+      html += `<div class="hint">今日の記録はまだありません。</div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function updateOngoing() {
+    const report = state.report;
+    if (!report || !report.ongoing) return;
+    const today = todayIso();
+    if (report.today !== today) { render(); return; } // 日付が変わったら作り直す
+    const d = findToday(report, today);
+    const total = (d ? d.total : 0) + ongoingElapsed(report);
+    const t = $("todayTotal"); if (t) { t.textContent = fmt(total); t.classList.toggle("over", total > LIMIT); }
+    const b = $("todayBar"); if (b) b.innerHTML = barHtml(total);
+    const e = $("ongoingElapsed"); if (e) e.textContent = fmt(ongoingElapsed(report));
+  }
+
+  function renderStats(title, s) {
+    const lg = s.longest, sh = s.shortest;
+    return `<div class="card"><h2>${esc(title)}</h2><div class="stats">
+      <div class="stat"><div class="lab">合計時間</div><div class="val">${fmt(s.total)}</div><div class="note">記録日数 ${s.days}日</div></div>
+      <div class="stat"><div class="lab">1日あたりの平均</div><div class="val">${avgLine(s.total, s.days)}</div><div class="note">外した回数 ${s.sections}回</div></div>
+      <div class="stat"><div class="lab">1回あたりの平均</div><div class="val">${avgLine(s.section_total, s.sections)}</div></div>
+      <div class="stat"><div class="lab">4時間超えの日</div><div class="val">${countOver(title)}日</div></div>
+      ${lg ? `<div class="stat wide"><div class="lab">いちばん長く外した</div><div class="val">${fmt(lg.minutes)}</div><div class="note">${esc(lg.raw)}【${lg.label}】</div></div>` : ""}
+      ${sh ? `<div class="stat wide"><div class="lab">いちばん短く外した</div><div class="val">${fmt(sh.minutes)}</div><div class="note">${esc(sh.raw)}【${sh.label}】</div></div>` : ""}
+    </div></div>`;
+  }
+
+  function countOver() {
+    const report = state.report;
+    const list = state.month === "all"
+      ? report.months.flatMap((m) => m.days)
+      : (report.months.find((m) => `${m.year}-${String(m.month).padStart(2, "0")}` === state.month) || { days: [] }).days;
+    return list.filter((d) => d.total > LIMIT).length;
+  }
+
+  function renderDays(mo, today) {
+    return `<div class="card"><h2>日ごとの内訳（バーは4時間で満杯）</h2><ul class="days">` + mo.days.map((d) => {
+      const [, m, dd] = d.date.split("-");
+      const holiday = d.weekday === "土" || d.weekday === "日";
+      const detail = RetainerLog.LABELS.map((label) => {
+        const pairs = d.sections[label];
+        if (!pairs.length) return "";
+        const mins = pairs.reduce((a, p) => a + (p[1] - p[0]), 0);
+        return `<div><b>${label}</b>${pairs.map((p) => `${fmtT(p[0])}-${fmtT(p[1])}`).join("、")}　${fmt(mins)}</div>`;
+      }).join("") || `<div>記録なし</div>`;
+      return `<li class="day${d.date === today ? " open" : ""}"><div class="day-row">
+        <span class="d${holiday ? " holiday" : ""}">${+m}/${+dd}<span class="wd">${d.weekday}</span></span>
+        ${barHtml(d.total, true)}
+        <span class="t${d.total > LIMIT ? " over" : ""}">${fmt(d.total)}</span>
+      </div><div class="day-detail">${detail}</div></li>`;
+    }).join("") + `</ul></div>`;
+  }
+
+  function renderWarnings(title, list) {
+    const badge = `<span class="badge${list.length ? "" : " zero"}">${list.length}</span>`;
+    const body = list.length
+      ? `<ul class="warns">${list.map((w) => `<li>${splitTag(w)}</li>`).join("")}</ul>`
+      : `<div class="hint" style="margin-top:0">警告はありません。</div>`;
+    return `<div class="card"><h2>${esc(title)}${badge}</h2>${body}</div>`;
+  }
+
+  // ---------------------------------------------------------------- 起動
+  if (!importFromHash()) {
+    const cached = lsGet(LS_TEXT);
+    if (cached !== null) {
+      state.text = cached;
+      state.loadedAt = lsGet(LS_AT);
+    }
+    render();
+  }
+  window.addEventListener("hashchange", importFromHash);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && state.text !== null) render(); });
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
