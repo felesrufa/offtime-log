@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>外していた時間の記録</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="robots" content="noindex">
+<style>
+  /*
+   * 第三者への提示用の印刷ページ。操作要素は置かない（画面の見た目がそのまま PDF になる）。
+   * 白背景・黒文字に固定。判定色は「目標内」「超過」の2色だけ。
+   */
+  :root {
+    --ink: #111;
+    --muted: #555;
+    --line: #bbb;
+    --ok: #0f766e;
+    --ok-soft: #e3f3f1;
+    --over: #b91c1c;
+    --over-soft: #fde8e8;
+    --bar-bg: #e8e8e8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; color: var(--ink); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 13px; line-height: 1.5;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .sheet { max-width: 190mm; margin: 0 auto; padding: 18px 16px 28px; }
+
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: .01em; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+  .meta span + span::before { content: "　／　"; color: var(--line); }
+
+  .verdict {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px;
+    font-size: 16px; font-weight: 700; margin-bottom: 12px; border: 1.5px solid;
+  }
+  .verdict.ok { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
+  .verdict.over { color: var(--over); background: var(--over-soft); border-color: var(--over); }
+  .verdict .mark { font-size: 20px; line-height: 1; }
+  .verdict small { font-weight: 500; font-size: 12px; color: inherit; opacity: .85; }
+
+  .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+  .cell { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .cell .lab { font-size: 11px; color: var(--muted); }
+  .cell .val { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 2px; }
+  .cell .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .cell.over .val { color: var(--over); }
+  @media (max-width: 480px) {
+    .summary { grid-template-columns: 1fr 1fr; }
+  }
+
+  h2 { font-size: 13px; margin: 0 0 6px; color: var(--muted); font-weight: 600; }
+
+  /* 月ごとの要約: 広い画面では表、狭い画面（iPhone）では2段組みに並べ替える */
+  .months { font-variant-numeric: tabular-nums; }
+  .mhead, .mrow {
+    display: grid; gap: 0 8px; align-items: end;
+    grid-template-columns: 1.5fr 1fr 1.3fr 1.1fr 1.1fr .8fr 1fr;
+    grid-template-areas: "month days total avg longest over judge";
+  }
+  .mhead { font-size: 11px; color: var(--muted); font-weight: 600; border-bottom: 1.5px solid var(--ink); padding-bottom: 4px; }
+  .mrow { border-top: 1px solid var(--line); padding: 7px 0 3px; }
+  .mrow:first-of-type { border-top: 0; }
+  .c { text-align: right; white-space: nowrap; }
+  .c.month { grid-area: month; text-align: left; }
+  .c.days { grid-area: days; } .c.total { grid-area: total; } .c.avg { grid-area: avg; }
+  .c.longest { grid-area: longest; } .c.over { grid-area: over; } .c.judge { grid-area: judge; }
+  .c .cap { display: none; font-size: 10px; color: var(--muted); font-weight: 500; }
+  .c.judge { font-weight: 700; }
+  .c.judge.ok { color: var(--ok); }
+  .c.judge.over { color: var(--over); }
+  .c.over.bad { color: var(--over); font-weight: 700; }
+  .mrow.none .c.days { grid-area: 1 / 2 / 2 / -1; text-align: left; color: var(--muted); }
+  .month { font-weight: 600; }
+  .month small { font-weight: 500; color: var(--muted); margin-left: 4px; font-size: 11px; }
+  .mbar { padding: 3px 0 8px; }
+  .mnote { padding: 0 0 8px; font-size: 11px; color: var(--muted); }
+  .muted { color: var(--muted); }
+  @media (max-width: 480px) {
+    .mhead { display: none; }
+    .mrow {
+      grid-template-columns: repeat(4, 1fr); gap: 6px 6px; align-items: start;
+      grid-template-areas: "month month total avg" "days longest over judge";
+    }
+    .mrow.none { grid-template-areas: "month month days days"; }
+    .mrow.none .c.days { grid-area: days; text-align: right; }
+    .c { text-align: left; }
+    .c .cap { display: block; }
+    .c.total, .c.avg { text-align: right; }
+    .c.judge { text-align: right; }
+  }
+
+  .track { position: relative; height: 9px; background: var(--bar-bg); border-radius: 4px; overflow: visible; }
+  .track .fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 4px; background: var(--ok); }
+  .track .fill.over { background: var(--over); }
+  .track .goal { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1.5px dashed var(--ink); }
+  .track .max { position: absolute; top: -2px; width: 2px; height: 13px; background: var(--ink); border-radius: 1px; }
+  .track .max.over { background: var(--over); }
+  .legend { font-size: 11px; color: var(--muted); margin: 6px 0 0; }
+  .legend i { display: inline-block; width: 14px; height: 7px; border-radius: 3px; background: var(--ok); vertical-align: middle; margin-right: 3px; }
+  .legend b { display: inline-block; width: 2px; height: 11px; background: var(--ink); vertical-align: middle; margin: 0 5px 0 10px; }
+  .legend u { text-decoration: none; border-left: 1.5px dashed var(--ink); padding-left: 5px; margin-left: 10px; }
+
+  .foot { margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+  .foot p { margin: 2px 0; }
+  .empty-msg { padding: 40px 10px; text-align: center; color: var(--muted); }
+
+  @media print {
+    @page { size: A4; margin: 12mm; }
+    .sheet { max-width: none; padding: 0; }
+    tr { page-break-inside: avoid; break-inside: avoid; }
+    .verdict, .summary { page-break-inside: avoid; break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet" id="sheet"></div>
+
+<script src="./aggregate.js"></script>
+<script>
+(function () {
+  "use strict";
+  const L = OfftimeLog;
+  const LIMIT = L.DAILY_LIMIT_MIN;
+  const fmt = L.formatHm;
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const sheet = document.getElementById("sheet");
+
+  // ------------------------------------------------------------ データ取得
+  function decodeHashData(hash) {
+    let s = hash;
+    try { s = decodeURIComponent(s); } catch (e) { /* そのまま */ }
+    s = s.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    const bin = atob(s);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    let text = new TextDecoder("utf-8").decode(bytes);
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    return text;
+  }
+  function loadText() {
+    const m = /^#d=(.+)$/.exec(location.hash || "");
+    if (m) {
+      try { return decodeHashData(m[1]); } catch (e) { return null; }
+    }
+    try { return localStorage.getItem("offtime-log:text"); } catch (e) { return null; }
+  }
+
+  // ------------------------------------------------------------ 期間
+  function parseYm(s) {
+    const m = /^(\d{4})-(\d{1,2})$/.exec(s || "");
+    if (!m) return null;
+    const y = +m[1], mo = +m[2];
+    if (mo < 1 || mo > 12) return null;
+    return y * 100 + mo;
+  }
+  function ymLabel(k) { return `${Math.floor(k / 100)}年${k % 100}月`; }
+  function nextYm(k) { const y = Math.floor(k / 100), m = k % 100; return m === 12 ? (y + 1) * 100 + 1 : k + 1; }
+  function daysInMonth(k) { return new Date(Math.floor(k / 100), k % 100, 0).getDate(); }
+
+  // ------------------------------------------------------------ 描画
+  function bar(avg, maxDay) {
+    // 4時間(LIMIT)を 80% の位置に置き、超過分も見えるようにする（最大 125% で頭打ち）
+    const scale = (v) => Math.min(v / LIMIT, 1.25) * 80;
+    const over = avg > LIMIT;
+    return `<div class="track">
+      <div class="fill${over ? " over" : ""}" style="width:${scale(avg)}%"></div>
+      <div class="goal" style="left:80%"></div>
+      ${maxDay > 0 ? `<div class="max${maxDay > LIMIT ? " over" : ""}" style="left:calc(${scale(maxDay)}% - 1px)"></div>` : ""}
+    </div>`;
+  }
+
+  function render() {
+    const text = loadText();
+    if (text === null || text === "") {
+      sheet.innerHTML = `<div class="empty-msg">表示するデータがありません。<br>アプリの「印刷用ページを開く」から開いてください。</div>`;
+      return;
+    }
+    const q = new URLSearchParams(location.search);
+    const report = L.buildReport(text, {});
+    if (report.error || !report.months.length) {
+      sheet.innerHTML = `<div class="empty-msg">有効な記録がありません。</div>`;
+      return;
+    }
+    const todayKey = (() => { const [y, m] = report.today.split("-"); return (+y) * 100 + (+m); })();
+    const todayDay = +report.today.split("-")[2];
+    const byKey = new Map(report.months.map((m) => [m.year * 100 + m.month, m]));
+    const keys = Array.from(byKey.keys());
+    let from = parseYm(q.get("from")) ?? Math.min(...keys);
+    let to = parseYm(q.get("to")) ?? Math.max(...keys);
+    if (from > to) [from, to] = [to, from];
+    if (to - from > 10 * 100) to = from + 10 * 100; // 10年で頭打ち（暴走防止）
+
+    // ---- 月ごとの要約
+    const rows = [];
+    let pDays = 0, pTotal = 0, pOver = 0, pLongest = null;
+    for (let k = from; k <= to; k = nextYm(k)) {
+      const mo = byKey.get(k);
+      const current = k === todayKey;
+      const calDays = current ? todayDay : daysInMonth(k);
+      if (!mo) { rows.push({ k, current, calDays, empty: true }); continue; }
+      const overDays = mo.days.filter((d) => d.total > LIMIT).sort((a, b) => (a.date < b.date ? -1 : 1));
+      const maxDay = Math.max(0, ...mo.days.map((d) => d.total));
+      const st = mo.stats;
+      rows.push({ k, current, calDays, days: st.days, total: st.total, avg: st.days ? L.pyRound(st.total / st.days) : 0,
+                  longest: st.longest, overDays, maxDay });
+      pDays += st.days; pTotal += st.total; pOver += overDays.length;
+      if (st.longest && (!pLongest || st.longest.minutes > pLongest.minutes)) pLongest = st.longest;
+    }
+    const pAvg = pDays ? L.pyRound(pTotal / pDays) : 0;
+    const pWithin = pDays - pOver;
+    const pRate = pDays ? Math.round(pWithin / pDays * 100) : 0;
+    const includesCurrent = rows.some((r) => r.current);
+    const made = new Date();
+    const madeStr = `${made.getFullYear()}/${made.getMonth() + 1}/${made.getDate()}`;
+
+    let html = `<h1>外していた時間の記録</h1>
+      <div class="meta"><span>期間: ${ymLabel(from)} 〜 ${ymLabel(to)}${includesCurrent ? "（当月は集計中）" : ""}</span><span>作成日: ${madeStr}</span><span>目標: 1日の合計 ${fmt(LIMIT)} 以内</span></div>`;
+
+    if (pDays === 0) {
+      html += `<div class="empty-msg">この期間には記録がありません。</div>`;
+      sheet.innerHTML = html;
+      return;
+    }
+
+    html += pOver === 0
+      ? `<div class="verdict ok"><span class="mark">✓</span><span>期間中すべての日が目標内 <small>（記録 ${pDays}日）</small></span></div>`
+      : `<div class="verdict over"><span class="mark">⚠</span><span>目標を超えた日が ${pOver}日 <small>（記録 ${pDays}日中、目標内 ${pRate}%）</small></span></div>`;
+
+    html += `<div class="summary">
+      <div class="cell"><div class="lab">記録日数</div><div class="val">${pDays}日</div></div>
+      <div class="cell"><div class="lab">目標内の日</div><div class="val">${pRate}%</div><div class="sub">${pWithin}日 / ${pDays}日</div></div>
+      <div class="cell${pOver ? " over" : ""}"><div class="lab">4時間超えの日</div><div class="val">${pOver}日</div></div>
+      <div class="cell${pAvg > LIMIT ? " over" : ""}"><div class="lab">1日あたりの平均</div><div class="val">${fmt(pAvg)}</div>${pLongest ? `<div class="sub">最長（1回）${fmt(pLongest.minutes)}</div>` : ""}</div>
+    </div>`;
+
+    const cell = (cls, cap, val) => `<div class="c ${cls}"><span class="cap">${cap}</span>${val}</div>`;
+    html += `<h2>月ごとの要約</h2><div class="months">
+      <div class="mhead"><div class="c month">月</div><div class="c days">記録日数</div><div class="c total">合計</div><div class="c avg">1日平均</div><div class="c longest">最長(1回)</div><div class="c over">超過日</div><div class="c judge">判定</div></div>`;
+    for (const r of rows) {
+      const name = `<span class="month">${ymLabel(r.k)}${r.current ? "<small>集計中</small>" : ""}</span>`;
+      if (r.empty) {
+        html += `<div class="mrow none"><div class="c month">${name}</div><div class="c days">記録なし</div></div>`;
+        continue;
+      }
+      const ok = r.overDays.length === 0;
+      html += `<div class="mrow">
+        <div class="c month">${name}</div>
+        ${cell("days", "記録日数", `${r.days}<span class="muted">/${r.calDays}</span>`)}
+        ${cell("total", "合計", fmt(r.total))}
+        ${cell("avg", "1日平均", fmt(r.avg))}
+        ${cell("longest", "最長(1回)", r.longest ? fmt(r.longest.minutes) : "—")}
+        ${cell("over" + (ok ? "" : " bad"), "超過日", `${r.overDays.length}日`)}
+        ${cell("judge " + (ok ? "ok" : "over"), "判定", ok ? "✓ 目標内" : "⚠ 超過")}
+      </div>`;
+      html += `<div class="mbar">${bar(r.avg, r.maxDay)}</div>`;
+      if (!ok) {
+        const list = r.overDays.map((d) => { const [, m, dd] = d.date.split("-"); return `${+m}/${+dd}（${fmt(d.total)}）`; }).join("、");
+        html += `<div class="mnote">超過日: ${esc(list)}</div>`;
+      }
+    }
+    html += `</div>
+      <div class="legend"><i></i>1日平均 <b></b>その月でいちばん長かった日 <u>目標 ${fmt(LIMIT)}</u></div>`;
+
+    html += `<div class="foot">
+      <p>集計ルール: 1日の合計は、その日に外していた時間の合計。目標は 1日 ${fmt(LIMIT)} 以内。「超過日」は合計が ${fmt(LIMIT)} を超えた日。</p>
+      <p>平均は記録がある日数で割った値。区分は外した時刻で判定（〜10:59 朝、〜15:59 昼、16:00〜 夜）。</p>
+    </div>`;
+    sheet.innerHTML = html;
+    document.title = `外していた時間の記録 ${ymLabel(from)}〜${ymLabel(to)}`;
+  }
+
+  render();
+  window.addEventListener("hashchange", render);
+})();
+</script>
+</body>
+</html>

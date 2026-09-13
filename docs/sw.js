@@ -3,11 +3,12 @@
  * アプリ本体(HTML/JS/manifest/アイコン)をキャッシュするだけ。データ(log.txt)は扱わない。
  * ファイルを更新したら CACHE_VERSION を上げる（古いキャッシュは activate で消える）。
  */
-const CACHE_VERSION = "offtime-log-v1";
+const CACHE_VERSION = "offtime-log-v2";
 const SHELL = [
   "./",
   "./index.html",
   "./aggregate.js",
+  "./report.html",
   "./manifest.webmanifest",
   "./icon-180.png",
   "./icon-192.png",

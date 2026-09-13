@@ -46,6 +46,7 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", "Noto Sans JP", sans-serif;
@@ -71,7 +72,13 @@
   }
   .btn:active { opacity: .85; }
   .btn.secondary { background: var(--pill); color: var(--text); font-weight: 500; font-size: 14px; padding: 10px 12px; }
+  a.btn { text-decoration: none; }
   input[type=file] { display: none; }
+  .sel { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .sel select {
+    flex: 1; min-width: 0; font: inherit; font-size: 15px; padding: 9px 10px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); -webkit-appearance: none; appearance: none;
+  }
 
   .today-total { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 6px; }
   .today-total .big { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -173,7 +180,7 @@
 
   const $ = (id) => document.getElementById(id);
   const content = $("content");
-  let state = { text: null, loadedAt: null, report: null, month: null, timer: null };
+  let state = { text: null, loadedAt: null, report: null, month: null, timer: null, print: { preset: "all", from: null, to: null } };
 
   // ---------------------------------------------------------------- 保存/読込
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -304,11 +311,14 @@
       html += renderWarnings("月に紐づかない警告", report.dateless_warnings);
     }
 
+    if (months.length) html += renderPrintCard(report, today);
+
     content.innerHTML = html;
     $("footer").textContent = `目標: 1日の合計 ${fmt(LIMIT)} 以下 ／ 区分は外した時刻で判定（〜10:59 朝、〜15:59 昼、16:00〜 夜）`;
 
     content.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => { state.month = b.dataset.key; render(); }));
     content.querySelectorAll(".day-row").forEach((r) => r.addEventListener("click", () => r.parentElement.classList.toggle("open")));
+    if (months.length) bindPrintCard(report, today);
 
     if (report.ongoing) {
       state.timer = setInterval(updateOngoing, 30 * 1000);
@@ -407,6 +417,79 @@
       ? `<ul class="warns">${list.map((w) => `<li>${splitTag(w)}</li>`).join("")}</ul>`
       : `<div class="hint" style="margin-top:0">警告はありません。</div>`;
     return `<div class="card"><h2>${esc(title)}${badge}</h2>${body}</div>`;
+  }
+
+  // ---------------------------------------------------------------- 印刷用ページ（第三者への提示用）
+  // 期間は開始月・終了月だけを report.html に渡す。プリセットはその2つを計算するだけ。
+  const ymKey = (y, m) => y * 100 + m;
+  const ymStr = (k) => `${Math.floor(k / 100)}-${String(k % 100).padStart(2, "0")}`;
+  const ymLabel = (k) => `${Math.floor(k / 100)}年${k % 100}月`;
+  function addMonths(k, n) {
+    let y = Math.floor(k / 100), m = k % 100 - 1 + n;
+    y += Math.floor(m / 12); m = ((m % 12) + 12) % 12;
+    return y * 100 + m + 1;
+  }
+  function toBase64Url(text) {
+    const bytes = new TextEncoder().encode(text);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function printRange(report, today) {
+    const keys = report.months.map((m) => ymKey(m.year, m.month));
+    const earliest = Math.min(...keys), latest = Math.max(...keys);
+    const [ty, tm] = today.split("-").map(Number);
+    const now = ymKey(ty, tm);
+    const p = state.print;
+    switch (p.preset) {
+      case "last3": return [addMonths(now, -2), now];
+      case "last6": return [addMonths(now, -5), now];
+      case "year": return [ymKey(ty, 1), now];
+      case "custom": {
+        let from = p.from || earliest, to = p.to || Math.max(latest, now);
+        if (from > to) [from, to] = [to, from];
+        return [from, to];
+      }
+      default: return [earliest, latest];
+    }
+  }
+  function printHref(report, today) {
+    const [from, to] = printRange(report, today);
+    let href = `./report.html?from=${ymStr(from)}&to=${ymStr(to)}`;
+    // ホーム画面アプリから開くと別のブラウザ画面になり localStorage を共有できないので、本文も URL に載せる
+    if (navigator.standalone) href += `#d=${toBase64Url(state.text)}`;
+    return href;
+  }
+  function renderPrintCard(report, today) {
+    const keys = report.months.map((m) => ymKey(m.year, m.month));
+    const [ty, tm] = today.split("-").map(Number);
+    const earliest = Math.min(...keys), latest = Math.max(Math.max(...keys), ymKey(ty, tm));
+    const p = state.print;
+    const opts = [];
+    for (let k = earliest; k <= latest; k = addMonths(k, 1)) opts.push(k);
+    const sel = (id, cur) => `<select id="${id}">` + opts.map((k) => `<option value="${k}"${k === cur ? " selected" : ""}>${ymLabel(k)}</option>`).join("") + `</select>`;
+    const presets = [["all", "全期間"], ["last3", "直近3ヶ月"], ["last6", "直近6ヶ月"], ["year", "今年"], ["custom", "月を指定"]];
+    const [from, to] = printRange(report, today);
+    return `<div class="card" id="printCard"><h2>印刷用ページ（第三者への提示用）</h2>
+      <div class="sel"><select id="printPreset">${presets.map(([v, l]) => `<option value="${v}"${p.preset === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="sel" id="printCustom"${p.preset === "custom" ? "" : " hidden"}>${sel("printFrom", p.from || earliest)}<span>〜</span>${sel("printTo", p.to || latest)}</div>
+      <a class="btn" id="printOpen" href="${printHref(report, today)}" target="_blank" rel="noopener">印刷用ページを開く（${ymLabel(from)}〜${ymLabel(to)}）</a>
+      <div class="hint">月ごとの要約（合計・平均・最長・4時間超えの日数）を1枚にまとめます。開いたページで 共有 → オプション → PDF で保存できます。</div>
+    </div>`;
+  }
+  function bindPrintCard(report, today) {
+    const p = state.print;
+    const refresh = () => {
+      const [from, to] = printRange(report, today);
+      const a = $("printOpen");
+      a.href = printHref(report, today);
+      a.textContent = `印刷用ページを開く（${ymLabel(from)}〜${ymLabel(to)}）`;
+      $("printCustom").hidden = p.preset !== "custom";
+    };
+    $("printPreset").addEventListener("change", (e) => { p.preset = e.target.value; refresh(); });
+    $("printFrom").addEventListener("change", (e) => { p.from = +e.target.value; refresh(); });
+    $("printTo").addEventListener("change", (e) => { p.to = +e.target.value; refresh(); });
+    $("printOpen").addEventListener("click", refresh);
   }
 
   // ---------------------------------------------------------------- 起動
