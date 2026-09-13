@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-retainer-log 集計スクリプト
+offtime-log 集計スクリプト
 
-log.txt は歯科矯正の保定装置（マウスピース）を外していた時刻の記録。
+log.txt は対象を外していた時刻の記録。
 次の2種類の行形式が1つのファイルに混在してよい（並び順も問わない）。
 
 (A) 手書き形式
     1日ごとに【朝】【昼】【夜】の区分があり、各区分に
     「外した時刻-つけた時刻」のペアが、複数あれば「、」区切りで並ぶ。
 
-        2026/1/27（火）
-        【朝】6:18-6:52
-        【夜】17:30-17:43、20:01-20:33
+        2026/3/10（火）
+        【朝】7:00-7:30
+        【夜】18:00-18:20、20:30-21:00
 
 (B) 打刻形式（iOSショートカットが背面タップで追記する行）
     1行 = 1打刻。「外」= 外した、「着」= つけた。
@@ -570,7 +570,7 @@ def print_warnings(texts):
 
 def print_report(report, now):
     print("=" * 62)
-    print("保定装置(マウスピース)を外していた時間の集計")
+    print("外していた時間の集計")
     print("=" * 62)
 
     if report["ongoing"]:
@@ -615,7 +615,7 @@ def print_report(report, now):
 def main():
     default_path = Path(__file__).resolve().parent / "log.txt"
 
-    parser = argparse.ArgumentParser(description="保定装置を外していた時間の集計")
+    parser = argparse.ArgumentParser(description="対象を外していた時間の集計")
     parser.add_argument("file", nargs="?", default=None, help="log.txtへのパス(省略時はスクリプト横のlog.txt)")
     parser.add_argument("--month", "-m", default=None, help="集計対象を絞り込む月。形式: YYYY-MM (例: 2026-02)")
     parser.add_argument("--json", action="store_true", help="画面表示の代わりに JSON を出力する")

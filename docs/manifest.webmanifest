@@ -1,7 +1,7 @@
 {
-  "name": "リテーナー記録",
-  "short_name": "リテーナー",
-  "description": "マウスピース（保定装置）を外していた時間の集計ビューア",
+  "name": "オフ記録",
+  "short_name": "オフ記録",
+  "description": "対象を外していた時間の集計ビューア",
   "lang": "ja",
   "start_url": "./",
   "scope": "./",

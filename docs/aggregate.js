@@ -1,17 +1,17 @@
 /*
- * retainer-log 集計ロジック（JavaScript 版）
+ * offtime-log 集計ロジック（JavaScript 版）
  *
  * aggregate.py の build_report() と同じ結果（同じ JSON）を返すように移植したもの。
  * ブラウザ（PWA）と node の両方で動く。仕様の正本は aggregate.py で、
  * 両者の一致は tests/parity.py で確認する。
  *
- *   const report = RetainerLog.buildReport(text, { today: "2026-09-13" });
+ *   const report = OfftimeLog.buildReport(text, { today: "2026-09-13" });
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {
     module.exports = factory();
   } else {
-    root.RetainerLog = factory();
+    root.OfftimeLog = factory();
   }
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";

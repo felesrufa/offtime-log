@@ -6,7 +6,7 @@ PWA 用アイコン(PNG)を外部ライブラリなしで生成する。
     python tools/make_icons.py
 
 docs/icon-180.png (iOS ホーム画面用), icon-192.png, icon-512.png を書き出す。
-絵柄: 濃い青緑の角丸背景に、白い U 字（マウスピース）と歯を模した小さな凹み。
+絵柄: 濃い青緑の角丸背景に、白い U 字と小さな凹み。
 """
 import math
 import struct
